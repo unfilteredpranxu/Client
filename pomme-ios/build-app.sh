@@ -24,11 +24,8 @@ export PATH="$HOME/.cargo/bin:$PATH"
 unset SDKROOT LIBRARY_PATH
 
 cd "$PROJECT_DIR/.."
-# shaderc, built for the Mac, keeps using a real Vulkan SDK's copy when there
-# is one; the app links MoltenVK as its Vulkan.
-if [ -n "${VULKAN_SDK:-}" ]; then
-    export SHADERC_LIB_DIR="$VULKAN_SDK/lib"
-fi
+# Use the pinned MoltenVK static library for the iOS Vulkan backend.
+# Compile shaderc for the iOS target; do not reuse host macOS shaderc.
 VULKAN_SDK="$(python3 tools/fetch_moltenvk.py "$platform")"
 export VULKAN_SDK
 # The staged MoltenVK SDK only contains libvulkan.a, not the Vulkan
