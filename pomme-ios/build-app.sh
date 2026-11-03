@@ -31,6 +31,15 @@ if [ -n "${VULKAN_SDK:-}" ]; then
 fi
 VULKAN_SDK="$(python3 tools/fetch_moltenvk.py "$platform")"
 export VULKAN_SDK
+# The staged MoltenVK SDK only contains libvulkan.a, not the Vulkan
+# registry (share/vulkan/registry/vk.xml). shaderc-sys otherwise treats
+# VULKAN_SDK as a full desktop Vulkan SDK and panics before compiling.
+# This iOS target must compile shaderc itself rather than link a host
+# macOS shaderc library. Point its explicit lookup at MoltenVK's lib
+# directory: it contains no shaderc, so shaderc-sys falls back to its
+# iOS-compatible source build without inspecting vk.xml.
+export SHADERC_LIB_DIR="$VULKAN_SDK/lib"
+test -f "$VULKAN_SDK/lib/libvulkan.a"
 cargo build -p pomme-ios --target "$triple" ${release:+"$release"}
 mkdir -p "$app" "$frameworks"
 # Copied only when it changed, so an unchanged build isn't re-signed.
