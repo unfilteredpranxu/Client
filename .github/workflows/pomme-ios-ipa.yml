@@ -2,12 +2,16 @@ name: Build Pomme iOS IPA
 
 on:
   push:
-    branches:
-      - master
+    branches: [master]
     paths:
       - .github/workflows/pomme-ios-ipa.yml
+      - tools/ios-ci-build.sh
+      - tools/fetch_moltenvk.py
+      - tools/build_openal.py
+      - tools/fetch_openal.py
       - pomme-ios/**
-      - tools/**
+      - pomme-client/**
+      - pomme-gpu-allocator/**
       - Cargo.toml
       - Cargo.lock
       - rust-toolchain.toml
@@ -18,39 +22,31 @@ permissions:
 
 concurrency:
   group: pomme-ios-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   ios-ipa:
-    name: Build unsigned iOS ARM64 IPA
-    runs-on: macos-latest
+    name: Build and verify unsigned iOS ARM64 IPA
+    runs-on: macos-26
     timeout-minutes: 180
     env:
       CARGO_TERM_COLOR: always
-      HOMEBREW_NO_AUTO_UPDATE: "1"
+      CARGO_BUILD_JOBS: '2'
+      HOMEBREW_NO_AUTO_UPDATE: '1'
     steps:
-      - name: Checkout Pomme and submodules
+      - name: Checkout pinned source and submodules
         uses: actions/checkout@v4
         with:
           submodules: recursive
-
-      - name: Show macOS and Xcode versions
-        shell: bash
-        run: |
-          set -euo pipefail
-          sw_vers
-          xcodebuild -version
-          xcrun --sdk iphoneos --show-sdk-version
+          persist-credentials: false
 
       - name: Install native build tools
         shell: bash
         run: |
           set -euo pipefail
           brew install xcodegen cmake ninja
-          xcodegen --version
-          cmake --version
 
-      - name: Install Pomme's pinned Rust and iOS target
+      - name: Install pinned Rust toolchain and iOS target
         shell: bash
         run: |
           set -euo pipefail
@@ -61,64 +57,29 @@ jobs:
           rustup toolchain install nightly-2026-08-21 --profile minimal
           rustup target add --toolchain nightly-2026-08-21 aarch64-apple-ios
           rustc --version
-          cargo --version
 
-      - name: Generate the Pomme Xcode project
+      - name: Compile, validate and package Pomme iOS
         shell: bash
-        run: |
-          set -euo pipefail
-          cd pomme-ios
-          xcodegen generate
-          test -d Pomme.xcodeproj
+        run: bash tools/ios-ci-build.sh
 
-      - name: Build native iOS app without signing
-        shell: bash
-        run: |
-          set -euo pipefail
-          export PATH="$HOME/.cargo/bin:$PATH"
-          mkdir -p target/ios-build
-          xcodebuild \
-            -project pomme-ios/Pomme.xcodeproj \
-            -scheme Pomme \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath "$GITHUB_WORKSPACE/target/ios-build" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY='' \
-            build 2>&1 | tee target/ios-build/xcodebuild.log
-
-      - name: Create and verify unsigned IPA
-        shell: bash
-        run: |
-          set -euo pipefail
-          APP="$GITHUB_WORKSPACE/target/ios-build/Build/Products/Release-iphoneos/Pomme.app"
-          IPA="$GITHUB_WORKSPACE/target/ios-build/Pomme-unsigned.ipa"
-          STAGING="$GITHUB_WORKSPACE/target/ios-build/ipa-staging"
-          test -d "$APP"
-          test -s "$APP/Pomme"
-          test -f "$APP/Info.plist"
-          file "$APP/Pomme"
-          mkdir -p "$STAGING/Payload"
-          ditto "$APP" "$STAGING/Payload/Pomme.app"
-          (cd "$STAGING" && ditto -c -k --sequesterRsrc --keepParent Payload "$IPA")
-          unzip -t "$IPA" | tail -n 4
-          ls -lh "$IPA"
-
-      - name: Upload IPA artifact
+      - name: Upload verified IPA
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: Pomme-iOS-unsigned
-          path: target/ios-build/Pomme-unsigned.ipa
+          name: Pomme-iOS-ARM64-unsigned
+          path: |
+            target/ios-build/Pomme-unsigned.ipa
+            target/ios-build/Pomme-unsigned.ipa.sha256
           if-no-files-found: error
           retention-days: 14
 
-      - name: Upload build log when compilation fails
-        if: failure()
+      - name: Preserve Rust and Xcode build diagnostics
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: Pomme-iOS-build-diagnostics
-          path: target/ios-build/xcodebuild.log
+          path: |
+            target/ios-build/*.log
+            target/ios-build/*.txt
           if-no-files-found: ignore
           retention-days: 7

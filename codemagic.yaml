@@ -1,94 +1,52 @@
-# Pomme iOS — first native-device build on Codemagic.
-# Produces an UNSIGNED IPA that must be signed before installing on an iPad.
-# Source: https://github.com/PommeMC/Client (master; reviewed 2026-11-03).
+# Pomme iOS device build (unsigned, must be signed before installation).
+# The same tools/ios-ci-build.sh runs on GitHub Actions and Codemagic.
 workflows:
   pomme-ios-unsigned:
-    name: Pomme iOS ARM64 - unsigned IPA
+    name: Pomme iOS ARM64 - verified unsigned IPA
     instance_type: mac_mini_m2
     max_build_duration: 120
     environment:
       xcode: 26.6
+      vars:
+        CARGO_BUILD_JOBS: "2"
     scripts:
-      - name: Verify checkout and submodules
+      - name: Verify source and fetch pinned submodules
         script: |
           set -euo pipefail
+          git rev-parse HEAD
           test -f pomme-ios/project.yml
-          test -f pomme-ios/build-app.sh
-          test -f rust-toolchain.toml
+          test -f tools/ios-ci-build.sh
           git submodule update --init --recursive
-          git rev-parse --short HEAD
           xcodebuild -version
-      - name: Install iOS build dependencies
+
+      - name: Install native macOS build tools
         script: |
           set -euo pipefail
           export HOMEBREW_NO_AUTO_UPDATE=1
           brew install xcodegen cmake ninja
           xcodegen --version
           cmake --version
-      - name: Install Pomme's pinned Rust toolchain
+
+      - name: Install pinned Rust and ARM64 iOS target
         script: |
           set -euo pipefail
           export PATH="$HOME/.cargo/bin:$PATH"
           if ! command -v rustup >/dev/null 2>&1; then
-            curl --fail --show-error --silent https://sh.rustup.rs | sh -s -- -y --profile minimal
+            curl --fail --silent --show-error https://sh.rustup.rs | sh -s -- -y --profile minimal
           fi
-          rustup toolchain install nightly-2026-08-21 --profile minimal --component rust-src
+          rustup toolchain install nightly-2026-08-21 --profile minimal
           rustup target add --toolchain nightly-2026-08-21 aarch64-apple-ios
-          rustc --version
           cargo --version
-      - name: Generate Xcode project
+          rustc --version
+
+      - name: Build, validate and package actual iOS ARM64 app
         script: |
           set -euo pipefail
-          cd pomme-ios
-          xcodegen generate
-          test -d Pomme.xcodeproj
-      - name: Compile iOS Rust engine first (full diagnostics)
-        script: |
-          set -euo pipefail
-          export PATH="$HOME/.cargo/bin:$PATH"
-          export CARGO_BUILD_JOBS=2
-          mkdir -p "$CM_BUILD_DIR/target/ios-build"
-          VULKAN_SDK="$(python3 tools/fetch_moltenvk.py ios)"
-          export VULKAN_SDK
-          export SHADERC_LIB_DIR="$VULKAN_SDK/lib"
-          test -s "$VULKAN_SDK/lib/libvulkan.a"
-          echo "Native Vulkan target: $VULKAN_SDK/lib/libvulkan.a"
-          echo "shaderc build/search directory: $SHADERC_LIB_DIR"
-          cargo build --release -p pomme-ios --target aarch64-apple-ios \
-            2>&1 | tee "$CM_BUILD_DIR/target/ios-build/rust-preflight.log"
-      - name: Compile Rust and iOS app (without signing)
-        script: |
-          set -euo pipefail
-          export PATH="$HOME/.cargo/bin:$PATH"
-          export CARGO_BUILD_JOBS=2
-          mkdir -p "$CM_BUILD_DIR/target/ios-build"
-          xcodebuild \
-            -project pomme-ios/Pomme.xcodeproj \
-            -scheme Pomme \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath "$CM_BUILD_DIR/target/ios-build" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY='' \
-            build 2>&1 | tee "$CM_BUILD_DIR/target/ios-build/xcodebuild.log"
-      - name: Package and verify unsigned IPA
-        script: |
-          set -euo pipefail
-          ROOT="$CM_BUILD_DIR/target/ios-build"
-          APP="$ROOT/Build/Products/Release-iphoneos/Pomme.app"
-          IPA="$ROOT/Pomme-unsigned.ipa"
-          test -d "$APP"
-          test -f "$APP/Pomme"
-          test -f "$APP/Info.plist"
-          mkdir -p "$ROOT/ipa-staging/Payload"
-          ditto "$APP" "$ROOT/ipa-staging/Payload/Pomme.app"
-          cd "$ROOT/ipa-staging"
-          ditto -c -k --sequesterRsrc --keepParent Payload "$IPA"
-          unzip -t "$IPA" | tail -n 3
-          ls -lh "$IPA"
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          bash tools/ios-ci-build.sh
+
     artifacts:
-      - target/ios-build/*.ipa
-      - target/ios-build/Build/Products/Release-iphoneos/*.app
+      - target/ios-build/Pomme-unsigned.ipa
+      - target/ios-build/Pomme-unsigned.ipa.sha256
       - target/ios-build/*.log
+      - target/ios-build/*.txt
