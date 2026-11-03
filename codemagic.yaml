@@ -42,10 +42,26 @@ workflows:
           cd pomme-ios
           xcodegen generate
           test -d Pomme.xcodeproj
+      - name: Compile iOS Rust engine first (full diagnostics)
+        script: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:$PATH"
+          export CARGO_BUILD_JOBS=2
+          mkdir -p "$CM_BUILD_DIR/target/ios-build"
+          VULKAN_SDK="$(python3 tools/fetch_moltenvk.py ios)"
+          export VULKAN_SDK
+          export SHADERC_LIB_DIR="$VULKAN_SDK/lib"
+          test -s "$VULKAN_SDK/lib/libvulkan.a"
+          echo "Native Vulkan target: $VULKAN_SDK/lib/libvulkan.a"
+          echo "shaderc build/search directory: $SHADERC_LIB_DIR"
+          cargo build --release -p pomme-ios --target aarch64-apple-ios \
+            2>&1 | tee "$CM_BUILD_DIR/target/ios-build/rust-preflight.log"
       - name: Compile Rust and iOS app (without signing)
         script: |
           set -euo pipefail
           export PATH="$HOME/.cargo/bin:$PATH"
+          export CARGO_BUILD_JOBS=2
+          mkdir -p "$CM_BUILD_DIR/target/ios-build"
           xcodebuild \
             -project pomme-ios/Pomme.xcodeproj \
             -scheme Pomme \
@@ -56,7 +72,7 @@ workflows:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY='' \
-            build
+            build 2>&1 | tee "$CM_BUILD_DIR/target/ios-build/xcodebuild.log"
       - name: Package and verify unsigned IPA
         script: |
           set -euo pipefail
@@ -75,3 +91,4 @@ workflows:
     artifacts:
       - target/ios-build/*.ipa
       - target/ios-build/Build/Products/Release-iphoneos/*.app
+      - target/ios-build/*.log
